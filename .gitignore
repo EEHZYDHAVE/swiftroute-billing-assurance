@@ -1,0 +1,24 @@
+﻿# Python and temporary files
+__pycache__/
+*.pyc
+.env
+.venv/
+
+# Excel temporary and backup files
+~$*.xlsx
+*.tmp
+*.bak
+
+# Generated data exports
+data/exports/*
+!data/exports/*/
+!data/exports/*/.gitkeep
+
+# Generated outputs
+outputs/*
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
