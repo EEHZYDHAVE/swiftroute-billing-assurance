@@ -1,255 +1,410 @@
-﻿## Billing Rulebook - Step 1: Billing Periods, Customer Classification and Billable Activity
+# SwiftRoute Billing Assurance Workbench
 
-**Status:** Working rulebook  
-**Scope:** Step 1 of the Billing Assurance Workbench design  
-**Purpose:** Establish the business rules that determine which customer activities enter a billing period and how they are organized for review. Pricing calculations, adjustments, validation logic and Gold-field mapping will be completed in subsequent steps.
+## Billing Rulebook
 
-### Rule status conventions
-
-- **Documented:** Explicitly stated in the SwiftRoute Business Operating Context.
-- **Agreed:** Confirmed during the rulebook design discussion.
-- **Proposed control:** A practical control recommended for consistent billing, subject to confirmation where indicated.
-- **Data validation pending:** The business rule is understood, but the curated Gold data must be inspected to confirm that it can be implemented reliably.
+**Version:** 1.0  
+**Prepared:** 8 November 2026  
+**Purpose:** Define the business rules, source-of-truth decisions, calculation boundaries, exception treatment and validation controls for the downstream Excel Billing Assurance Workbench.
 
 ---
 
-## 1. Customer billing arrangements
+## 1. Purpose and scope
 
-SwiftRoute uses three primary billing arrangements. The arrangement determines the billing cadence and the commercial basis used to calculate charges.
+The Billing Assurance Workbench helps Finance review billing completeness and accuracy for SwiftRoute business customers. It brings together the expected billing outputs already calculated in the existing Gold Finance models, actual QuickBooks invoice values, and invoice-level receivables information. It is a review and decision-support workpaper, not a replacement billing engine or accounting system.
 
-| Arrangement | Business definition | Billing cadence | Pricing basis | Payment terms |
-|---|---|---|---|---|
-| Pay-as-you-go (PAYG) | No committed minimum. Typically used by smaller or newer customers during an initial period. | Weekly, Monday to Sunday | Standard list rates | Net 7 |
-| Volume contract | Customer commits to a monthly delivery minimum in exchange for a negotiated per-delivery rate. | Monthly | Negotiated rate, subject to the contract's terms | Net 30 |
-| Fixed-fee contract | Customer pays a flat monthly fee for an agreed delivery volume within a defined service/zone scope. Charges may apply to activity above the included volume. | Monthly | Monthly fee plus eligible overage | Net 30 |
+The workbench has two primary views:
 
-### 1.1 Classification rules
+1. **Billing Review:** a customer-and-billing-period review queue comparing Gold's invoice-ready expected charges with actual invoiced amounts, while exposing the underlying service and charge detail and any unresolved exceptions.
+2. **Receivables & Collections:** an invoice-level view of invoice amount, outstanding balance, due date, payment terms, aging and collection review information.
 
-1. Use the applicable Salesforce account/contract information and the active commercial agreement to determine the billing arrangement.
-2. Apply a contract only when its status and effective dates make it applicable to the service date being billed.
-3. Use the rate and terms effective on the service date, not simply the most recently loaded rate record.
-4. Do not classify a customer as PAYG merely because an active contract record cannot be found. Missing, expired, draft or unmapped contract information must be flagged for review rather than silently assigned standard rates.
-5. Use the canonical customer/client identifier to connect Salesforce, Onfleet, Linnworks and QuickBooks records. Similar customer names are not a reliable substitute for an identifier.
-6. Customer industry or segment labels, such as e-commerce, retail, healthcare/pharma or B2B, describe the customer but do not override its contractual billing arrangement.
+The workbench covers both last-mile delivery and fulfillment billing where the existing Gold Finance outputs provide usable billing information.
 
-### 1.2 Service scope is separate from billing arrangement
+### 1.1 Non-negotiable architecture boundary
 
-Fulfillment and last-mile delivery describe the services a customer uses. They are not additional contract types. A customer may therefore be:
+The existing Gold layer is the source to be consumed. It must not be modified, rebuilt, extended or repurposed as part of this workbench project. All downstream shaping, extracts, workbook logic, presentation labels and validation must take place outside Gold in the separate Billing Assurance project workspace.
 
-- Last-mile delivery only.
-- Fulfillment and last-mile delivery.
-- Fulfillment only.
-- Of unknown or unconfirmed service scope.
-
-A customer can also have more than one commercial arrangement or service scope. The billing logic must preserve those distinctions in the supporting charge detail.
-
-### 1.3 Consolidation for the Billing Review worksheet
-
-The Billing Review summary will use **one row per customer per selected billing period**. Where a customer has multiple service arrangements or charge categories within the same period and those charges belong on one consolidated invoice, the expected charges will be aggregated into one customer-period total.
-
-The detail/breakdown view must retain the underlying components, including the relevant arrangement or contract, service type, activity, quantity, rate, pricing basis and calculated charge. Consolidation must not erase the audit trail or cause different rates to be applied as though they were one arrangement.
-
-Where a customer has distinct billing cadences or separate invoice requirements, the records must not be forced into one artificial period. The customer-period summary should follow the actual invoice grouping supported by the commercial terms.
-
-**Reconciliation grain:** customer + billing period, with currency included where a customer can be billed in more than one currency. Expected billing is compared with the actual QuickBooks invoice total at this grain. The workbench must not imply line-level matching between calculated operational charges and QuickBooks invoice lines unless a reliable matching method is established.
+Where a source field, classification or calculation is missing, the workbench must expose the limitation and handle it as a review item. It must not silently create a substitute business rule or alter Gold outputs to make the workbook appear complete.
 
 ---
 
-## 2. Billing periods and invoice timetable
+## 2. Source-of-truth models and their roles
 
-### 2.1 Monthly contracted customers
-
-The documented monthly billing cycle is:
-
-- Billing period closes on the final calendar day of the month.
-- Billing preparation begins on the first business day of the following month.
-- Invoices are targeted for issue by the 5th of the month.
-- Standard payment terms are Net 30 from the invoice date.
-
-### 2.2 PAYG customers
-
-The agreed PAYG billing cycle is:
-
-- **Period start:** Monday.
-- **Period end:** Sunday.
-- **Close:** End of day Sunday.
-- **Invoice preparation:** Monday following the close.
-- **Standard payment terms:** Net 7 from the invoice date.
-
-The week is therefore a Monday-to-Sunday calendar week. The billing period must be represented explicitly by its start and end dates, not only by a week number.
-
-### 2.3 Service-date assignment
-
-**Proposed control:** Assign operational activity to a billing period using the date on which the service was performed, rather than the date on which the source record was ingested, processed or exported.
-
-For Onfleet delivery activity, use the relevant completion timestamp for a successfully completed customer-facing delivery. Convert timestamps to the applicable operating location's local time before deriving the service date, where source timestamps are stored in UTC.
-
-For Linnworks fulfillment activity, the exact event that establishes the billable date (for example, pick, pack or dispatch) remains to be confirmed against the operating rule and available source fields.
-
-Storage charges require a period-based measurement. A current stock snapshot alone must not be treated as historical monthly storage utilization.
-
-### 2.4 Payment terms and collection stages
-
-Payment terms and collection escalation are separate concepts:
-
-- Payment due date is derived from the invoice date and the applicable contractual terms.
-- Invoice age is the number of days since invoice date.
-- Days past due is the number of days after the due date.
-- Collection stage is determined by the documented escalation process and must not be substituted for either invoice age or days past due.
-
-The operating context describes collection actions at days 35, 45, 55 and 60. The precise meaning of the reference to a “35th” day should be checked against the invoice due-date calculation before it is implemented as an automated rule.
-
----
-
-## 3. Billable activity catalogue
-
-The catalogue below defines the activity types that may contribute to expected customer billing. Inclusion in the catalogue does not mean that every source record is automatically billable. Each activity must satisfy the relevant eligibility, customer, contract and pricing checks.
-
-| Activity | Proposed billing unit / basis | Primary source | Rule and control |
-|---|---|---|---|
-| Same-day delivery | Per eligible completed delivery | Onfleet | Bill a successful customer-facing delivery when customer, service, zone and applicable contract/rate can be identified. |
-| Next-day delivery | Per eligible completed delivery | Onfleet | Same eligibility principle as same-day delivery, using the applicable service rate. |
-| Scheduled/window delivery | Base delivery charge, plus an applicable surcharge where the contract provides for it | Onfleet and Salesforce | Apply a surcharge only when the relevant service/contract terms support it. Do not add a surcharge when it is already included in the base rate. |
-| Returns collection | Per eligible return movement, using the applicable zone rate where supported by the operating context | Onfleet | A return must be distinguishable from an ordinary pickup or delivery task. Identification method is pending Gold-data validation. |
-| B2B distribution run | Per distribution run, as the starting business rule | Onfleet and Salesforce | Operating context describes regular box-truck distribution runs on fixed schedules and routes under dedicated account contracts with committed volumes. Validate that Gold data identifies runs and that contract rates support a per-run unit before implementation. |
-| Fulfillment pick/pack | Per picked or packed unit, potentially differentiated by complexity tier | Linnworks | Confirm the billable event, unit definition and complexity mapping before calculation. |
-| Inventory storage | Per agreed pallet/shelf unit per billing month, or other contract-defined measure | Linnworks | Requires an appropriate monthly or historical utilization measure. A single current stock snapshot is insufficient to reconstruct prior-period usage. |
-| Delivery associated with fulfillment | Per eligible delivery, if separately chargeable under the customer agreement | Onfleet, with Linnworks context where available | Check whether delivery is included in a fulfillment package or separately priced. Do not charge twice for a bundled service. |
-| Special handling | Contract-defined flat fee or per-movement charge | Operational evidence and Salesforce/approved adjustment record | Charge only where a contract/rate or approved manual amount supports it. Retain reason, evidence and approval. |
-| Fixed-fee overage | Per eligible unit above the included contractual volume, using the overage rate | Salesforce and operational activity | Apply only after measuring eligible activity against the contract's included volume and scope. |
-| Service-failure credit | Negative adjustment, where approved | Onfleet and finance approval evidence | Credit only when the failure is attributable to SwiftRoute and the adjustment is approved. Not every failed task automatically creates a credit. |
-| Warehouse returns processing | No separate charge by default | Linnworks / contract | Charge separately only if the contract or rate card explicitly defines a processing fee. This is distinct from charging for return collection. |
-| Other commercial adjustment | Approved amount | Finance-approved record and supporting evidence | Must include customer, billing period, amount, reason/reference and approval evidence. |
-
-### 3.1 Successful and unsuccessful delivery tasks
-
-The agreed billing rule is that **unsuccessful deliveries are not billable to the customer**. They are treated as a SwiftRoute operating cost.
-
-For the billing calculation:
-
-- Only eligible, successfully completed customer-facing deliveries may enter standard delivery charges.
-- Failed, unsuccessful or incomplete attempts must be excluded from customer-billable delivery quantities.
-- Unsuccessful tasks should remain available in supporting operational data for cost and service-performance review. They must not disappear simply because they are excluded from billing.
-- A pickup task is not automatically a billable delivery. It must be identified as a separately chargeable activity, such as a qualifying return collection, and supported by the applicable contract/rate.
-
-### 3.2 Returns identification
-
-The business rule distinguishes return collection from ordinary pickup activity, but the exact source-data identification method is **pending validation**.
-
-The Gold layer should be inspected for fields, event types, task metadata or derived classifications that reliably distinguish return movements from normal delivery/pickup work. Until that inspection is complete:
-
-- Do not classify all pickup tasks as returns.
-- Do not automatically apply a return charge based only on a generic pickup task type.
-- Retain an unresolved/unknown classification for records that cannot be confidently identified.
-- Confirm whether the existing Gold model already provides a usable return indicator before proposing a model change.
-
-### 3.3 B2B distribution runs
-
-The operating context describes B2B distribution as regular box-truck runs, operating on fixed schedules and routes, and managed under dedicated account contracts with committed volumes and fixed route structures.
-
-The initial billing interpretation is **per distribution run**, rather than per stop or per individual delivery. This is the business rule to test against the curated data.
-
-Before implementing the charge:
-
-1. Check whether the Gold data can identify a run as a distinct operational unit.
-2. Check whether multiple Onfleet tasks/stops can be associated with the same run.
-3. Inspect the relevant Salesforce rate records and rate units.
-4. Resolve any conflict between a per-run commercial description and a technical rate record expressed as `per_delivery`.
-
-If the available data cannot reliably identify runs, do not approximate run counts by counting individual tasks without an agreed rule. Record the limitation and determine whether a reliable source field or mapping is available.
-
----
-
-## 4. Eligibility and duplicate-charge controls
-
-An operational record should enter expected billing only when the following checks pass, as applicable:
-
-1. It represents a customer-facing service or other contractually chargeable activity.
-2. The customer can be identified using the canonical customer/client identifier.
-3. The service date falls within the relevant billing period and the applicable contract's effective dates.
-4. The service/activity type can be identified sufficiently to select the correct pricing rule.
-5. The required pricing dimensions, such as service type and zone, are available.
-6. The activity satisfies the agreed completion/eligibility rule.
-7. The activity has not already been included in a prior billing period or duplicated through another source record.
-8. The contract does not bundle the activity into another charge already being calculated.
-
-### 4.1 No-double-counting principles
-
-- A fulfillment pick/pack charge and a delivery charge may both be valid when the agreement prices them separately.
-- A delivery included in a fixed fee or fulfillment bundle must not also be charged as a separate delivery unless the contract explicitly permits it.
-- A scheduled-delivery surcharge must not be added when it is already included in the base rate.
-- Fixed-fee customers should be charged the monthly fee for the defined included scope, with overage applied only to eligible activity above the commitment.
-- A volume commitment must not automatically be treated as a minimum billable quantity unless the contract explicitly states that the minimum is chargeable.
-- Return collection and warehouse returns processing are separate activities. Do not assume that one implies the other.
-- Multiple operational tasks associated with one service must not automatically be counted as multiple billable deliveries.
-
----
-
-## 5. Source-system responsibilities
-
-| Source | Primary billing role |
-|---|---|
-| Salesforce | Customer commercial arrangements, contract status/effective dates, service scope, rate cards, negotiated pricing and contractual terms. |
-| Onfleet | Last-mile operational activity, task status, completion timestamps, service/task attributes, route/zone context and delivery evidence. |
-| Linnworks | Fulfillment activity, picked/packed/dispatched quantities, inventory and storage-related data. |
-| QuickBooks | Actual invoices, invoice dates, invoice totals, balances, due dates and payment/receivables information. |
-
-The source system responsible for a business fact should remain authoritative for that fact. The billing workbench may combine sources for review, but should not silently replace missing commercial terms with operational assumptions.
-
----
-
-## 6. Known data considerations to validate during implementation
-
-The following are implementation checks, not reasons to invent missing business rules:
-
-- The reviewed QuickBooks monthly sample showed 94 invoices per month and 94 distinct valid client identifiers per month, with no missing client IDs in that sample. This is evidence for the reviewed monthly sample, not proof that all weekly PAYG billing cases are covered.
-- The Onfleet diagnostic identified 6,595 tasks without `client_id`. These cannot be assigned to a customer automatically without a reliable mapping.
-- Onfleet task counts include task types that are not equivalent to billable completed deliveries. Task-level records must be classified before billing.
-- The available contract-rate diagnostics include categories such as `same_day`, `next_day`, `scheduled`, `distribution_run`, `returns`, `fulfillment_pick` and `storage`, but coverage and rate units require validation.
-- A technical rate record for `distribution_run` was observed with a `per_delivery` unit, while the operating description supports charging per run. This conflict must be resolved before applying the rate.
-- Linnworks stock data currently available as a snapshot does not, by itself, establish historical monthly storage utilization.
-- A reliable direct relationship between Onfleet delivery tasks and Linnworks orders has not yet been established. Do not manufacture a link using customer names, timestamps or approximate amounts.
-
----
-
-## 7. Items carried forward for confirmation
-
-These are the remaining decisions or data checks. They do not block documenting the rules already agreed.
-
-| Item | Current position | Next action |
+| Existing Gold model | Workbench role | Primary use |
 |---|---|---|
-| Authoritative source for billing arrangement | Salesforce contract/account information is the intended source. | Confirm the exact Gold fields and precedence where account and contract records differ. |
-| Mixed arrangements and invoice consolidation | Consolidate charge components at customer + billing period when they belong to one invoice; preserve arrangement-level detail in the breakdown. | Confirm how distinct billing cadences or separate invoice requirements are represented. |
-| Returns classification | Must distinguish returns from ordinary pickup tasks. | Inspect Gold fields and source task metadata; retain unknown where ambiguous. |
-| B2B distribution run | Per run is the starting rule. | Validate run identifiers/grouping and resolve `per_run` versus `per_delivery` rate-unit conflict. |
-| Billable fulfillment event | Not yet decided. | Confirm whether picked, packed or dispatched quantity/event drives billing. |
-| Storage measurement | Requires a monthly/historical measure. | Confirm whether contract uses month-end, daily average, peak usage or another basis, and whether data supports it. |
-| Failed delivery attempts | Not billable; treated as SwiftRoute operating cost. | Confirm Gold status mapping reliably identifies unsuccessful tasks. |
-| Return processing fee | No separate fee by default unless contract explicitly provides one. | Check rate cards and contract terms. |
-| Manual adjustments and credits | Require reason, reference and approval evidence. | Define approval source and required evidence fields in Step 3. |
-| Due-date calculation | Net 7 / Net 30 from invoice date are the stated terms. | Confirm calendar-day treatment and weekend/holiday handling. Clarify the operating document's “35th day” reference against due-date calculation. |
+| `gold_finance.billing_invoice_lines` | Billing detail and charge evidence | Detailed activity, service, quantity, contract/rate context, review status and `invoice_ready_amount` |
+| `gold_finance.billing_reconciliation` | Billing-period summary and reconciliation | Expected invoice-ready amount, actual invoiced amount, invoice count, exception counts and reconciliation status by customer/service/cadence/period |
+| `gold_finance.accounts_receivable` | Receivables and collections | One row per invoice, due date, terms, invoice amount, outstanding balance, applied payments and aging fields |
+| `gold_finance.financial_transaction_lines` | Supporting financial audit only | Inspect transaction types and amounts; do not use as the primary receivables calculation or infer credits from expenses |
+| `gold_last_mile.fact_delivery` and its dimensions | Operational context where needed | Investigate delivery outcomes, service, contract and zone context; do not independently re-price delivery activity |
+| `gold_fulfillment.fact_fulfillment_transaction` and its dimensions | Fulfillment activity context where needed | Investigate stock/dispatch activity; do not independently calculate billing charges |
+| `gold_customer.fact_customer_economics` | Supplementary customer-period context | Customer service mix and financial context; not a replacement for the Finance billing and AR models |
+
+### 2.1 Primary model responsibilities
+
+- Use `billing_invoice_lines` for line-level charge evidence and drill-down.
+- Use `billing_reconciliation` for the customer-period review summary and its precomputed variance and exception measures.
+- Use `accounts_receivable` for invoice-level balances and aging.
+- Use the other Gold models only to explain or investigate source activity when required. They must not be used to recreate a price or overwrite a Finance Gold result.
 
 ---
 
-## 8. Step 1 acceptance criteria
+## 3. Step 1: Billing periods, customer classification and billable activity
 
-Step 1 is ready to close when:
+### 3.1 Billing review grain
 
-- PAYG is defined as Monday-to-Sunday, with invoice preparation on Monday.
-- Monthly contracted billing follows calendar-month close and the documented invoice timetable.
-- Customer billing arrangement is distinct from service scope.
-- Customer-period summary consolidation is defined, while underlying arrangement and charge detail is retained.
-- Service-date assignment is defined for delivery activity.
-- Successful delivery is billable only when the other eligibility and contract checks pass.
-- Unsuccessful delivery is excluded from customer billing and retained as a SwiftRoute operating cost.
-- Returns are not inferred from generic pickup tasks; Gold classification is to be validated.
-- B2B distribution is provisionally priced per run, subject to validating run identification and rate-unit compatibility.
-- Remaining data-dependent questions are explicitly carried into the Gold mapping and validation steps.
+The primary Billing Review grain is **one customer for one billing period**. All relevant service and charge components belonging to that customer-period are consolidated into the summary amount. This allows Finance to review the total amount expected and the total amount actually invoiced without splitting a customer's invoice into separate summary rows for each service or commercial arrangement.
 
-**Next step:** Step 2 will define the pricing hierarchy and calculation formulas using the arrangements and billable activity catalogue established here.
-"""
+The detailed breakdown remains available beneath the summary. It should retain the source billing line and, where populated, the activity source, service type, billing unit, quantity basis, quantity, contract/rate context, line status, review explanation and invoice-ready amount.
 
-path = Path("/mnt/data/billing_rulebook_step1_revised.md")
-path.write_text(content, encoding="utf-8")
-print(f"Created: {path}")
-print(f"Size: {path.stat().st_size:,} bytes")
+The summary should also retain service-level and exception counts so that a consolidated amount does not conceal incomplete billing coverage.
+
+### 3.2 Billing-period definition
+
+Use the billing-period identifiers and boundaries supplied by Gold, including the available billing period label, start/end dates, service month and reconciliation period fields. The workbook must not create alternative billing periods that are not represented by the source billing outputs.
+
+The business operating context describes PAYG billing as a Monday-to-Sunday weekly cycle. That is the stated operating rule, but the inspected Gold billing outputs do not currently demonstrate a weekly PAYG cadence. The observed cadence values are `MONTHLY` and `UNKNOWN`, and the billing-period outputs are monthly in the supplied data.
+
+Therefore:
+
+- Preserve Monday-to-Sunday as the documented PAYG operating rule.
+- Do not generate weekly customer-periods in the workbook from the current Gold data.
+- Use the billing periods actually supplied by Gold for the present workbench.
+- Treat `UNKNOWN` cadence as unresolved. Do not assume it means weekly PAYG or monthly contracted billing.
+
+### 3.3 Customer and contract classification
+
+The inspected billing data contains `Fixed Rate` and `Variable Rate` contract/account classifications. These are source classifications, not sufficient evidence to map a customer to a specific commercial arrangement such as PAYG, committed-volume contract or fixed monthly fee.
+
+The workbench must:
+
+- Preserve the source contract/account classification as supplied.
+- Keep service scope (last-mile, fulfillment or both) separate from commercial arrangement.
+- Avoid translating `Fixed Rate` directly into “fixed monthly fee”.
+- Avoid translating `Variable Rate` directly into “PAYG”.
+- Show unknown or unavailable commercial terms as requiring review rather than inferring an arrangement.
+
+The current curated AR data shows Net 30 and Net 60 payment terms. The operating context describes Net 7 for PAYG, but Net 7 is not demonstrated in the supplied Gold AR records. The workbook must use the payment terms attached to each actual invoice and must not assign Net 7 based only on an assumed PAYG classification.
+
+### 3.4 Last-mile service activity
+
+The inspected Gold service categories include `next_day`, `same_day`, `distribution_run`, `scheduled` and an unknown/unmapped category. The workbench should use the service classifications provided by Gold and retain the source service label for investigation.
+
+The following activity rules apply to the workbench:
+
+| Activity condition | Workbench treatment |
+|---|---|
+| Successful, completed delivery with a supported service/rate and a ready billing line | Include the Gold-produced invoice-ready charge |
+| Unsuccessful delivery | Not billable under the agreed workbench rule; treat as SwiftRoute operating cost, not customer revenue |
+| Pickup task | Do not charge automatically. Keep under review until contractual billability is established |
+| Task not completed | Exclude from billable quantity under the current rule |
+| Unknown or unmapped service type | Hold for review; do not assign a rate-card service by guesswork |
+| Missing customer mapping | Hold outside the customer-level billing comparison until the canonical customer mapping is resolved |
+| Missing applicable rate | Hold as a pricing exception; do not calculate an expected charge in Excel |
+| Unknown billing cadence | Hold as a billing-period/commercial classification exception |
+
+Gold may label failed-task activity `REVIEW_FAILED_TASK_CHARGEABILITY`. Preserve that source status. The workbench should separately make the agreed business treatment clear: unsuccessful deliveries are not billable and are a SwiftRoute operating cost. Do not modify the Gold status or include failed activity in customer expected revenue. This is not a cost-allocation rule: the current extracts do not establish a reliable cost per failed task, so do not multiply failed-task counts by a customer rate or allocate general operating expenses to individual failed deliveries.
+
+### 3.5 Distribution service basis
+
+The operating context describes distribution work in terms of scheduled routes/runs, sometimes using box trucks and dedicated arrangements. However, the inspected Gold billing output prices the available `distribution_run` activity on a `per_delivery` basis. The relevant billing output contains 49 lines for 2 customers, 66 billable units and $8,442.62 in invoice-ready charges. The inspected delivery model does not expose a distinct run identifier that would support a reliable count of physical runs.
+
+For this workbench:
+
+- Consume the Gold `per_delivery` unit and its `invoice_ready_amount`.
+- Do not reinterpret each task or delivery as a distinct physical run.
+- Do not calculate a per-run charge or a distinct run count.
+- Retain the distinction between the operational description of distribution runs and the per-delivery billing basis represented in Gold.
+
+### 3.6 Fulfillment, returns and storage
+
+Fulfillment pick/pack billing is represented in the Finance billing lines with a `per_unit` basis and an invoice-ready amount. The inspected dataset contains 41 fulfillment-pick billing lines totalling $201,016.05. Use the Finance billing output for the expected amount; the fulfillment transaction model is supporting operational evidence only.
+
+The inspected returns and storage reconciliation records contain actual invoiced amounts but no corresponding ready billing-line calculation:
+
+- Returns: $286,768.43 across 178 reconciliation rows and 84 customers.
+- Storage: $719,404.71 across 66 reconciliation rows and 11 customers.
+
+No detailed `billing_invoice_lines` expected-charge rows were returned for these service categories in the supplied validation. As a result:
+
+- Show returns and storage actual invoiced amounts where present.
+- Mark their expected-charge coverage as unavailable/not calculated.
+- Do not create an expected quantity, rate or charge from the actual invoice amount.
+- Do not calculate or present an expected-versus-actual variance for those categories as though the expected amount had been validated.
+
+Do not infer that every pickup is a return. Returns must remain distinct from pickup activity unless a source classification explicitly identifies the return.
+
+---
+
+## 4. Step 2: Pricing hierarchy, charge calculation and expected billing
+
+### 4.1 Gold owns the pricing calculation
+
+The existing Finance Gold billing model already provides the applicable billing and pricing outputs, including contract/rate context, rate unit, base rate, applicable discount, source/calculated net rate, candidate/billable quantities, calculated gross/net charge and `invoice_ready_amount`.
+
+The workbench must consume these calculated outputs. It must not independently implement a second pricing hierarchy or recalculate charges from quantities and rates in Excel or in downstream SQL.
+
+In particular:
+
+- Use `invoice_ready_amount` as the line-level expected charge when the line is ready to bill.
+- Use `invoice_ready_expected_charge_amount` in `billing_reconciliation` for the customer/service/cadence-period expected amount.
+- Retain rate and quantity fields for reviewer traceability, not to create a competing calculation.
+- Do not silently substitute a standard rate when the applicable Gold rate is missing.
+- Do not derive an unsupported contract method, surcharge, overage or discount in the workbook.
+
+### 4.2 Billing readiness is distinct from activity eligibility
+
+An activity can be eligible for consideration but still not be ready to bill. The validation profile demonstrates this distinction. For example, activity with `activity_eligibility_status = ELIGIBLE` can still carry `REVIEW_BILLING_CADENCE_UNKNOWN`, `MISSING_APPLICABLE_RATE` or `UNMAPPED_SERVICE_TYPE` and have no `invoice_ready_amount`.
+
+Therefore, `ELIGIBLE` must not be interpreted as “ready to invoice”. The workbench must consider the billing-line status, review status and presence of a valid invoice-ready amount.
+
+### 4.3 Null expected amounts are not zero
+
+A null `invoice_ready_amount` or `invoice_ready_expected_charge_amount` means that Gold has not supplied a calculated invoice-ready amount for that line or group. It must not be converted to zero for display or variance calculation.
+
+The workbook should distinguish at least these conditions:
+
+- **Calculated:** an invoice-ready expected amount is present.
+- **Partially covered / review required:** an expected amount is present, but one or more billing, pricing or chargeability exceptions remain in the same customer-period.
+- **Not calculated:** no invoice-ready expected amount is present.
+- **Actual only:** an actual invoice amount exists but there is no corresponding expected-charge calculation, as seen for returns and storage.
+
+Where unresolved exception counts exist in a customer-period, the ready amount may represent only the chargeable portion that Gold could calculate. It must not be presented as a complete expected invoice total. Use the reconciliation exception counts and statuses to qualify the comparison.
+
+### 4.4 Expected-versus-actual calculation
+
+For customer-periods with a usable expected amount and no unresolved billing-coverage exceptions, the variance convention is:
+
+`Variance = Actual invoiced amount - Invoice-ready expected amount`
+
+A negative variance means the actual invoice amount is below the expected amount. A positive variance means the actual invoice amount is above the expected amount.
+
+Use the variance already supplied by `billing_reconciliation` where it matches this convention. The workbook should not calculate a conclusive variance when expected coverage is incomplete or unavailable. In those cases, show the amount/status and the outstanding exception count, and label the comparison as provisional or not assessable.
+
+### 4.5 Charge detail and traceability
+
+For each ready billing line, retain enough detail to let a reviewer trace the amount back to the Gold output. Where available this includes:
+
+- `billing_line_key` and customer identifiers;
+- billing period start/end and label;
+- activity source and service type;
+- billing unit and quantity basis;
+- candidate and billable quantity;
+- applicable contract and rate identifiers;
+- rate effective date, rate unit, base rate and discount context;
+- source/calculated net rate and calculated gross/net charge;
+- `invoice_ready_amount`;
+- billing line status, review status and review explanation.
+
+The detail is explanatory evidence. The workbench is not an invoice-line generator and does not replace QuickBooks entry.
+
+---
+
+## 5. Step 3: Actual invoices, payments, exceptions and review controls
+
+### 5.1 Actual invoice amount
+
+The actual invoiced amount in `billing_reconciliation` has been validated against `accounts_receivable` at customer and billing-period level.
+
+The supplied comparison found:
+
+- 564 customer-periods with actual invoice amounts represented on both sides;
+- exact agreement for all 564 matching amounts;
+- total actual invoiced amount of $5,714,696.41 in both models;
+- no mismatched actual amounts;
+- 94 reconciliation-only customer-periods with no matching AR invoice amount; and
+- no AR-only customer-periods in the comparison.
+
+The reconciliation-only groups had no actual invoiced amount in the supplied profile. They should be shown as **no matching actual invoice recorded in Gold**, not automatically treated as an error or assumed to be an invoice that is overdue. Finance can decide whether the period is awaiting billing, legitimately unbilled or missing an invoice.
+
+### 5.2 Detail-to-summary expected amount validation
+
+The expected-charge detail was tested against the reconciliation summary at customer-period grain:
+
+- 658 customer-period groups were compared;
+- 291 groups had populated expected amounts on both sides, and all 291 matched;
+- no detail-only or reconciliation-only populated expected-amount groups were found;
+- the remaining 367 groups had no invoice-ready expected amount on either side.
+
+This supports using `billing_reconciliation` for the summary and `billing_invoice_lines` for the expandable breakdown. The 367 null groups must remain not calculated, not zero.
+
+### 5.3 Receivables and collections
+
+Use `gold_finance.accounts_receivable` as the source for the Receivables & Collections worksheet. Its intended grain is one row per QuickBooks invoice.
+
+The supplied profile contains 564 unique invoices across 94 customers, with:
+
+- total invoice amount: $5,714,696.41;
+- recorded current balance: $1,344,188.70;
+- reconstructed payment balance matching the recorded balance, with zero aggregate difference;
+- 371 paid/zero-balance invoices; and
+- 193 outstanding invoices, all of which are more than 90 days past due in the supplied snapshot.
+
+Use the invoice's own `payment_terms`, `invoice_date`, `due_date`, `recorded_current_balance`, `days_past_due`, `aging_bucket`, payment linkage and receivables review status. Do not assume all customers share the same payment terms.
+
+The supplied records demonstrate Net 30 and Net 60 terms. They do not demonstrate Net 7. Use the actual invoice-level terms from Gold.
+
+The observed aging profile contains paid/zero-balance and greater-than-90-days-past-due records, but no populated intermediate aging buckets. The workbook must display the source aging classification and must not manufacture a historical aging distribution.
+
+The supplied schema does not identify a clearly defined aging as-of date. `days_past_due` should therefore be treated as the value delivered by the Gold snapshot, not recalculated with the Excel `TODAY()` function. Display the workbook's Last Refreshed timestamp and make the snapshot nature of aging clear.
+
+### 5.4 Collection escalation milestones
+
+The business operating context identifies the following collection escalation points:
+
+| Milestone | Action |
+|---|---|
+| Day 35 | Automated QuickBooks reminder |
+| Day 45 | Finance Director email |
+| Day 55 | Account Manager escalation |
+| Day 60 | Finance Director and VP Operations review of service continuation/suspension |
+
+The available business context does not conclusively establish whether these day counts are measured from invoice date or from due date. Do not automatically derive a collection stage from `days_past_due` until that basis is confirmed. Preserve the milestones as operating policy and keep the day-count basis as an explicit rulebook clarification before automating the stage.
+
+### 5.5 Payment transaction handling
+
+`financial_transaction_lines` contains payment headers and payment application lines. In the supplied profile:
+
+- 407 payment-header records total $4,370,507.71;
+- 407 payment-application records also total $4,370,507.71.
+
+These are two representations of the same payment flow at different record levels. Do not add the payment-header total and the payment-application total together when calculating cash received or collections. Use the AR model's linked/applied payment and reconstructed-balance fields for the invoice-level collections view.
+
+The payment header profile also reports unapplied amounts. Retain the relevant Gold unapplied-payment fields for review where useful, but do not allocate unapplied cash to an invoice without a valid application link.
+
+### 5.6 Credits, refunds and adjustments
+
+The supplied financial transaction profile contains 974 positive invoice-line records across 564 invoices, totalling $5,714,696.41. It does not demonstrate negative customer invoice lines or a distinct credit/refund/adjustment transaction type.
+
+The 28 negative transaction lines in the supplied profile are QuickBooks operating-expense lines, not customer invoice credits. They have no linked invoice in the returned profile. They must not be treated as reductions to billed revenue or as customer credits.
+
+Accordingly:
+
+- Do not infer customer credits or invoice adjustments from negative expense entries.
+- Do not automatically net operating expenses against customer billing.
+- Treat any customer credit, refund or invoice adjustment as unsupported by the inspected transaction extract until an explicit customer-linked source record is available.
+- Keep any separately evidenced manual adjustment in a clearly identified reviewer process; do not silently change the Gold expected or actual invoice amounts.
+
+### 5.7 Exception handling
+
+Preserve Gold's `billing_line_status`, `billing_review_status`, `activity_eligibility_status` and `review_explanation`. The workbench may map those source statuses to readable display groupings, but it must not overwrite the source status or create a misleading “ready” classification.
+
+The main exception types observed include:
+
+| Gold status / condition | Workbench treatment |
+|---|---|
+| `REVIEW_BILLING_CADENCE_UNKNOWN` | Review commercial cadence/period basis; do not assume weekly or monthly from the status alone |
+| `REVIEW_PICKUP_CHARGEABILITY` | Hold pickup chargeability for contract review; do not bill automatically |
+| `REVIEW_FAILED_TASK_CHARGEABILITY` | Exclude unsuccessful delivery under the agreed workbench rule and flag the source status for visibility |
+| `UNMAPPED_SERVICE_TYPE` | Hold until the source service is mapped to a supported service/rate category |
+| `MISSING_CUSTOMER_MAPPING` | Hold until canonical customer identification is resolved; do not place under a guessed customer |
+| `MISSING_APPLICABLE_RATE` | Hold as a pricing exception; no workbook rate fallback |
+| `NOT_COMPLETED` | Exclude from billable quantity under the current rule |
+| Fulfillment source/dispatch matching exceptions | Retain as operational review items; do not create a charge without Gold's invoice-ready result |
+| Returns/storage with actual invoice but no expected calculation | Show actual amount and mark expected coverage as unavailable/not calculated |
+
+An `ELIGIBLE` activity status does not clear a billing exception. A line remains unresolved if its billing status/review status indicates an issue or it lacks an invoice-ready amount.
+
+The final grouped exception query was intentionally limited to 20 rows. Its returned groups demonstrate the exception categories and their scale, but must not be treated as a complete inventory of every grouped exception combination.
+
+---
+
+## 6. Workbench presentation and decision rules
+
+### 6.1 Billing Review summary
+
+Each customer-period summary should show, at minimum:
+
+- customer identifier and customer name;
+- billing period label and period boundaries where available;
+- service scope/service mix;
+- invoice-ready expected amount from Gold;
+- actual invoiced amount from Gold reconciliation, cross-checked to AR;
+- variance where expected coverage is complete enough to assess;
+- actual invoice count;
+- ready-line count and review/exception counts;
+- an explicit coverage/review status; and
+- Last Refreshed timestamp for the workbook extract.
+
+All applicable service and charge components should roll up into the same customer-period summary. The breakdown should preserve the service and line-level detail needed for investigation.
+
+### 6.2 Variance interpretation
+
+A numerical variance alone is not sufficient to conclude that an invoice is incorrect. Before a reviewer treats it as an actionable billing variance, the reviewer should establish that:
+
+1. the expected amount is populated;
+2. there are no material unresolved billing, cadence, rate or chargeability exceptions affecting expected coverage;
+3. the actual amount is present and reconciled to AR; and
+4. both sides refer to the same customer and billing period.
+
+If any of these conditions is not met, display the relevant review status and avoid presenting the amount difference as a conclusive underbilling or overbilling result.
+
+### 6.3 Receivables & Collections view
+
+The receivables worksheet should have one row per invoice, with invoice number, customer, invoice date, due date, payment terms, invoice amount, current balance, days past due, aging bucket, payment information, receivables review status and collection action/stage where the day-count basis has been confirmed.
+
+Do not aggregate invoices into one row in this worksheet. The customer-period consolidation rule applies to Billing Review, not to the invoice-level receivables view.
+
+### 6.4 Reviewer notes and manual intervention
+
+The workbench may provide controlled reviewer-note or disposition fields for investigating exceptions. Such fields are downstream workpaper annotations only. They must not change source Gold values, overwrite QuickBooks actuals, or silently convert an unresolved line into a ready-to-bill amount.
+
+Any manual resolution should be traceable to a named reviewer, date, explanation and supporting evidence where the workbook design supports those fields.
+
+---
+
+## 7. Validation evidence and control outcomes
+
+The following controls were completed against the supplied Gold outputs:
+
+| Validation | Observed result | Rulebook consequence |
+|---|---|---|
+| Billing line key uniqueness and customer-period coverage | 27,432 billing lines with unique billing-line keys; 95 client identifiers including the `N/A` sentinel | Use the stable billing-line key for detail; exclude `N/A` from customer selection and retain it as an unresolved mapping condition |
+| Billing cadence and account classification | `MONTHLY` and `UNKNOWN` cadences; `Fixed Rate` and `Variable Rate` classifications | Do not infer weekly PAYG or map account class to a commercial arrangement |
+| Ready-line arithmetic | No gross, net or invoice-ready arithmetic mismatches in the tested ready-to-bill service groups, using a $0.02 tolerance | Consume Gold's charge values; no separate Excel price calculation |
+| Detail-to-reconciliation expected amount | 291 populated customer-period amounts matched; 367 groups had no expected amount on either side | Detail can support the summary; null expected amounts remain not calculated |
+| Reconciliation actual amount to AR | 564 matching customer-period actuals; zero mismatches; both totals $5,714,696.41 | Use reconciliation for Billing Review actuals and AR for invoice details/collections |
+| Receivables balance reconstruction | Recorded and reconstructed balances matched; aggregate difference zero | Use the existing AR balance fields, while retaining source review flags |
+| Distribution billing basis | Gold billing uses `per_delivery`; no run identifier supports physical run count | Use per-delivery basis; do not manufacture run counts |
+| Returns and storage | Actual amounts present, expected-charge calculation unavailable | Display actual-only with expected coverage unavailable |
+| Transaction signs | Invoice lines all positive; negative rows are operating expenses | No customer credit/adjustment logic can be inferred from the supplied extract |
+| Payment record levels | Header and application totals are identical | Do not double-count payments across record levels |
+
+---
+
+## 8. Known limitations and decisions still requiring confirmation
+
+The following are known limitations of the current source outputs. They are not invitations to modify Gold; they define what the downstream workbench must communicate.
+
+1. **Weekly PAYG representation:** the operating rule says Monday-Sunday, but the current billing output does not represent weekly PAYG periods. Use available Gold periods until a source period is present.
+2. **Commercial arrangement mapping:** `Fixed Rate` and `Variable Rate` do not independently identify fixed-fee, volume-commitment or PAYG arrangements.
+3. **Distribution run count:** the billing output is per delivery and there is no distinct run key in the inspected model.
+4. **Returns and storage expected billing:** actual invoiced amounts are visible, but no corresponding expected billing-line calculations were returned.
+5. **Customer credits and adjustments:** the inspected financial transaction lines do not demonstrate customer-linked credit or adjustment records.
+6. **Collection milestone basis:** confirm whether Day 35/45/55/60 is measured from invoice date or due date before the workbench automatically assigns collection stages.
+7. **Aging as-of date:** the supplied AR fields do not expose a clearly defined as-of date. Treat days past due as a value from the Gold snapshot and show Last Refreshed.
+8. **Partially covered customer-periods:** a ready amount can coexist with unresolved billing exceptions. Show exception counts and qualify the expected-versus-actual result.
+
+---
+
+## 9. Downstream implementation guardrails
+
+1. Extract from the existing Gold models without changing them.
+2. Keep SQL extraction and validation scripts, documentation, reference mappings and workbook files in the separate `swiftroute-billing-assurance` project.
+3. Do not commit production data exports to Git; retain only approved non-sensitive sample/fixture data where needed.
+4. Preserve source identifiers and Gold status fields in the extracts so that every summary can be traced to its source rows.
+5. Include a Last Refreshed timestamp in the workbook and document the manual refresh procedure.
+6. Keep reference mappings and reviewer-facing display labels downstream and controlled.
+7. Do not use workbook formulas to recreate contract pricing or to override Gold-calculated invoice-ready amounts.
+8. Do not use null expected values as zero, double-count payments, treat operating expenses as customer credits, or calculate collection stages before the day-count basis is confirmed.
+
+---
+
+## 10. Completion status
+
+**Step 1 - Billing periods, customer classification and billable activity:** documented against the operating context and current Gold representation.
+
+**Step 2 - Pricing hierarchy and expected charges:** documented with the boundary that Gold owns the pricing calculation and the workbench consumes invoice-ready outputs.
+
+**Step 3 - Actual invoices, payments, exceptions and validation:** documented against the completed validation outputs, with unsupported credit/adjustment treatment explicitly excluded.
+
+The rulebook is ready to serve as the business-rule reference for the next project artifact, `data_dictionary.md`. Any future change should be recorded as a downstream workbench rule or as a documented source limitation.
